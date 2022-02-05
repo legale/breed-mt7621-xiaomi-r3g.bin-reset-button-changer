@@ -1,0 +1,432 @@
+#!/usr/bin/python3
+#Breed bootloader breed-mt7621-xiaomi-r3g.bin reset button patcher v2
+
+
+import lzma, sys, os
+from binascii import crc32
+from crc import crc_posix
+from struct import pack
+from struct import unpack
+from time import time
+
+byte_orders = {"be": ">", "le": "<"}
+int_sizes = {1: "B", 2: "H", 4: "I", 8: "Q"}
+
+def pack_auto(i, size, order = "be"):
+  param = byte_orders[order] + int_sizes[size]
+  return pack(param, i)
+
+def unpack_auto(data, order = "be"):
+  param = byte_orders[order] + int_sizes[len(data)]
+  return unpack(param, data)[0]
+
+def get_pow(i):
+  return len(bin(i)[2:]) - 1
+
+def pack_lzma_bin(data, lzma_props):
+  print("Compressing data with lzma...")
+  data_len = len(data)
+  print("  data length 0x%08x %d"% (data_len, data_len))
+  print("  lzma compression properties:")
+  for k, v in lzma_props.items():
+    print("    %s: 0x%x %d" % (k,v,v))
+  
+  src = "tmp_data.bin"
+  dst = "tmp_data.bin.lzma"
+  with open(src, "wb") as f:
+    f.write(data)
+  p = lzma_props
+  exec_str = "./lzma e -d%s -lc%s -lp%s -pb%s '%s' '%s' 2>/dev/null" % \
+    (get_pow(p["dict_size"]), p["lc"], p["lp"], p["pb"], src, dst)
+  print("Exec: " + exec_str)
+  ret = os.popen(exec_str).read()
+  if ret == "":
+    print("Done.")
+  else:
+    print("Error: " + ret)
+  
+  with open(dst, "rb") as f:
+    lzma_data = f.read()
+  lzma_len = len(lzma_data)
+
+  os.remove(src); os.remove(dst) 
+  print("lzma data length 0x%08x %d" % (lzma_len, lzma_len))
+  return lzma_data
+
+
+def unpack_lzma_bin(lzma_data):
+  print("Decompressing lzma data...")
+  lzma_bin = read_lzma_bin(lzma_data)
+  lzma_h = read_lzma_header(lzma_bin["lzma_header"])
+  lzma_props = decode_lzma_props(lzma_h)
+  print("  lzma properties:")
+  for k,v in lzma_props.items():
+    print("    %s 0x%x %d" % (k,v,v))
+  
+  src = "tmp_lzma_data.lzma"
+  dst = "tmp_lzma_data.bin"
+  with open(src, "wb") as f:
+    f.write(lzma_data) 
+
+  exec_str = "./lzma d %s %s 2>/dev/null" % (src, dst)
+  print("Exec: " + exec_str)
+  ret = os.popen(exec_str).read()
+  if ret == "":
+    print("  Done.")
+  else:
+    print("Error: %s" % ret)
+    exit(1)
+   
+  with open(dst, "rb") as f:
+    data = f.read()
+  data_len = len(data)
+
+  os.remove(src); os.remove(dst) 
+  print("data length 0x%08x %d" % (data_len, data_len))
+  return data
+
+def read_breed_data(data, breed_magic_int):
+  breed_magic = pack(">I", breed_magic_int)
+  i = breed_magic_int
+  print("Looking for breed magic number 0x%04x %d..." % (i, i))
+  brh_off = data.find(breed_magic)
+  if brh_off > -1:
+    print("Found offset 0x%04x %d" % (brh_off, brh_off))
+  else:
+    print("Error: not found")
+    return False
+  lzma_off = brh_off + 16
+  print("  breed header offset 0x%04x %d" % (brh_off, brh_off) ) 
+  print("  lzma data offset    0x%04x %d" % (lzma_off, lzma_off) )
+  br_h = read_breed_header(data[brh_off:lzma_off])
+  lzma_len = unpack_auto(br_h["length"], "be") #convert 4 bytes to uint32_t 
+  print("  lzma bin data length 0x%04x %d" % (lzma_len, lzma_len))
+  lzma_end = lzma_off + lzma_len 
+  return {
+		"uimage_header":	data[0:64],
+		"preloader_bin":	data[64:brh_off],
+		"breed_header":		data[brh_off:lzma_off],
+		"lzma_bin":        data[lzma_off:lzma_end]
+  }
+
+def read_lzma_bin(lzma_bin_data):
+  return {
+    "lzma_header": lzma_bin_data[0:13],
+    "lzma_data": lzma_bin_data[13:]
+  }
+
+def read_lzma_header(lzma_header):
+  return {
+    "lzma_props": lzma_header[0:1],
+    "dict_size": lzma_header[1:5],
+    "unpacked_size": lzma_header[5:13]
+  }
+
+def read_uimage_header(h):
+  # uboot image header 64B
+  return {
+    "magic":         h[0:  4],      #/* 4B Image Header Magic Number */
+    "header_crc":    h[4:  8],      #/* 4B Image Header CRC Checksum */
+    "time":          h[8: 12],      #/* 4B Image Creation Timestamp  */
+    "length":        h[12:16],      #/* 4B Image Data Size           */
+    "load_address":  h[16:20],      #/* 4B Data   Load  Address      */
+    "entry_poin":    h[20:24],      #/* 4B Entry Point Address       */
+    "data_crc":      h[24:28],      #/* 4B Image Data CRC Checksum   */
+    "os":            h[28:29],      #/* 1B Operating System          */
+    "arch":          h[29:30],      #/* 1B CPU architecture          */
+    "type":          h[30:31],      #/* 1B Image Type                */
+    "comp":          h[31:32],      #/* 1B Compression Type          */
+    "name":          h[32:44],      #/* 12B Image Name               */
+    "nand_header":   h[44:64],      #/* 20B Nand header */
+  }
+
+def read_nand_header(h):
+  return {
+      "nand_ac_timing":    h[0 : 4],    #/* 4B nand timing */
+      "stage_offset":      h[4 : 8],    #/* 4B stage1 offset */
+      "bootloader_offset": h[8 :12],    #/* 4B bootloader offset */
+      "nand_info_1_data":  h[12:16],    #/* 4B */
+      "crc":               h[16:20]    #/* 4B crc POSIX preloader + breed_header + lzma_data
+  }
+
+def read_breed_header(h):
+  return {
+    "breed_magic":  h[0:4], # 0x37540178 
+    "length":       h[4:8],
+    "load_address": h[8:12],
+    "entry_point":  h[12:16]
+  }
+
+def pack_parsed(dict):
+  data = bytearray()
+  for k,v in dict.items():
+    if type(v) is not bytes:
+      print("Error: %s type is %s, bytes expected." % (k, type(v)))
+      exit(1)
+    data += v
+  return bytes(data)
+
+def decode_lzma_props(lzma_h):
+  lzma_props = unpack_auto(lzma_h["lzma_props"], "le")
+  dict_size =  unpack_auto(lzma_h["dict_size"], "le")
+  lc = lzma_props % 9
+  lzma_props /= 9
+  pb = lzma_props / 5
+  lp = lzma_props % 5
+  return {
+    "dict_size": dict_size,
+    "lc": int(lc),
+    "pb": int(pb),
+    "lp": int(lp)
+  }
+	
+def encode_lzma_props(lc, pb, lp):
+  return pb * 5 + lp * 9 + lc
+
+def bin2hex(data, delim = ""):
+  return delim.join("%02x" % n for n in data)
+
+
+def extract_breed(filepath, directory, breed_magic_int):
+  f = open(filepath, 'rb')
+  d = f.read()
+  breed = read_breed_data(d, breed_magic_int)
+  dirpath = os.path.realpath(directory)
+  if not os.path.exists(dirpath):
+    os.makedirs(dirpath)
+  print("Extracting breed file %s to %s " % (filepath, dirpath))
+  for k, v in breed.items():
+    dst = k + ".bin"
+    print("  writing %s to %s" % (k, dst))
+    dstpath = dirpath + "/" + dst
+    f = open(dstpath, 'wb')
+    f.write(v)
+    f.close()
+  print("Done.")    
+  return 0
+
+def get_breed_data_wo_header(d):
+  return d["preloader_bin"] + d["breed_header"] + d["lzma_bin"]
+
+def find_magic_off(data, hex_str, start = None, end = None):
+  seq = bytes.fromhex(hex_str.replace(" ", ""))
+  off = data.find(seq, start, end)
+  if off > -1:
+    return off
+  else:
+    return -1
+
+def assign_reset_btn(button, breed_bin):
+  breed_bin = bytearray(breed_bin)
+  red_magic_seq = "06 00 04 24 01 00 05 24"
+  rst_magic_seq = "00 04 24 01 00 05 24"
+  print("Looking for red magic sequence...")
+  off = find_magic_off(breed_bin, red_magic_seq)
+  if off > -1:
+    print("Found offset: 0x%04x %d" % (off, off))
+  else:
+    print("Error: not found")
+    exit(1)
+  
+  start = off - 32 #start offset -32 bytes
+  end = off
+  print("Looking for reset magic sequence from 0x%04x to 0x%04x..." % (start, end) )
+  off = find_magic_off(breed_bin,rst_magic_seq, start, end)
+  if off > -1:
+    print("Found offset: 0x%04x %d" % (off, off))
+  else:
+    print("Error: not found")
+    exit(1)
+
+  rst_val_off = off - 1
+  rst_val_end = rst_val_off + 2
+  print("Changing reset button value with offset 0x%04x %d..."\
+      % (rst_val_off, rst_val_off))
+  cur_val = unpack_auto(breed_bin[rst_val_off:rst_val_end], "le")
+  print("Current value 0x%02x %d" % (cur_val, cur_val))
+  breed_bin[rst_val_off:rst_val_end] = pack_auto(button, 2, "le")
+  cur_val = unpack_auto(breed_bin[rst_val_off:rst_val_end], "le")
+  print("New value 0x%02x %d" % (cur_val, cur_val))
+  return bytes(breed_bin)
+
+def patch_breed(src, dst, rstkey, breed_magic_int):
+  #read breed data
+  with open(src, "rb") as f:
+    breed_data = f.read()
+  
+  #check original breed image
+  check_breed_image(breed_data, breed_magic_int, "original breed image")
+
+  breed = read_breed_data(breed_data, breed_magic_int)
+  uimage_h = read_uimage_header(breed["uimage_header"])
+  nand_h = read_nand_header(uimage_h["nand_header"])
+  lzma_bin = read_lzma_bin(breed["lzma_bin"])
+  lzma_h = read_lzma_header(lzma_bin["lzma_header"])
+  lzma_props = decode_lzma_props(lzma_h)
+  breed_h = read_breed_header(breed["breed_header"])
+  breed_bin_data = unpack_lzma_bin(breed["lzma_bin"])
+
+  breed_bin_data = assign_reset_btn(rstkey, breed_bin_data)
+  lzma_bin_data = pack_lzma_bin(breed_bin_data, lzma_props)
+
+  ########################### making new image ###############################
+  breed["lzma_bin"] = lzma_bin_data
+
+  #new breed header values
+  breed_h["length"] = pack_auto(len(lzma_bin_data), 4, "be")
+  breed["breed_header"] = pack_parsed(breed_h)
+
+  #new uinmage header values
+  uimage_h["data_crc"] = pack_auto(crc32(get_breed_data_wo_header(breed)), 4, "be")
+  #uimage_h["time"] = pack_auto(int(time()), "be")
+  uimage_h["length"] = pack_auto(len(get_breed_data_wo_header(breed)), 4, "be")
+
+  #reset ckecksums
+  uimage_h["header_crc"] = pack_auto(0, 4)
+  nand_h["crc"] = pack_auto(0, 4)
+  nand_h_data = pack_parsed(nand_h)
+  uimage_h["nand_header"] = nand_h_data
+
+  #update uimage header data
+  uimage_h_data = pack_parsed(uimage_h)
+  breed["uimage_header"] = uimage_h_data
+
+  #new nand checksum
+  nand_h["crc"] = pack_auto(crc_posix(uimage_h_data), 4, "be")
+  nand_h_data = pack_parsed(nand_h)
+  uimage_h["nand_header"] = nand_h_data
+
+  #update uimage header data
+  uimage_h_data = pack_parsed(uimage_h)
+
+  #new uimage header crc
+  uimage_h = read_uimage_header(uimage_h_data)
+  uimage_h["header_crc"] = pack_auto(crc32(uimage_h_data), 4, "be")
+
+	#uodate uimage header data
+  uimage_h_data = pack_parsed(uimage_h)
+  breed["uimage_header"] = uimage_h_data
+
+  #new breed image data
+  breed["uimage_header"] = uimage_h_data
+  breed_data_new = pack_parsed(breed)
+  
+  #check new breed image
+  check_breed_image(breed_data_new, breed_magic_int, "patched breed image")
+
+  #save new breed image
+  with open(dst, "wb") as f:
+    f.write(breed_data_new)
+  return 0
+
+def assert_equal(a, b, name):
+  if a == b:
+    print("  Checking %s...\t\t%s" % (name, "ok"))
+  else:
+    print("  Checking %s...\t\t%s a: 0x%04x %s b: 0x%04x %s" % (name, "failed", a, a, b, b))
+    exit(1)
+  return True 
+
+def check_breed_image(data, breed_magic_int, name):
+  print("Checking %s..." % name)
+  img = read_breed_data(data, breed_magic_int)
+  u_h = read_uimage_header(img["uimage_header"])
+  nand_h = read_nand_header(u_h["nand_header"])
+  b_h = read_breed_header(img["breed_header"])
+
+  #uimage header data length
+  a = unpack_auto(u_h["length"], "be")
+  b = len(get_breed_data_wo_header(img))
+  assert_equal(a, b, "uimage header data length")
+  
+  #breed header lzma length
+  assert_equal(unpack_auto(b_h["length"], "be"), \
+  len(img["lzma_bin"]), "breed header lzma length")
+  
+  #uimage header data checksum
+  a = unpack_auto(u_h["data_crc"], "be")
+  b = crc32(get_breed_data_wo_header(img))
+  assert_equal(a, b, "uimage header data checksum")
+
+  #uimage header checksum
+  a = unpack_auto(u_h["header_crc"], "be")
+  ##reset header ckecksums
+  u_h["header_crc"] = pack_auto(0, 4)
+  img["uimage_header"] = pack_parsed(u_h)
+  b = crc32(img["uimage_header"])
+  assert_equal(a, b, "uimage header checksum")
+   
+  #nand header checksum
+  a = unpack_auto(nand_h["crc"], "be")
+  nand_h["crc"] = pack_auto(0, 4)
+  u_h["nand_header"] = pack_parsed(nand_h)
+  img["uimage_header"] = pack_parsed(u_h)
+  b = crc_posix(img["uimage_header"])
+  assert_equal(a, b, "nand header checksum")
+  return True
+
+
+  #####################################################################
+
+################## arguments parsing  ############################
+
+kwargs = {}
+i = 1
+while i < len(sys.argv):
+  arg = sys.argv[i]
+  if arg == '-u' or arg == '--unpack':
+    kwargs['unpack'] = True
+  elif arg == '-h' or arg == '--help':
+    kwargs['usage'] = True
+  elif arg == '-o' or arg == '--outdir':
+    i += 1
+    kwargs['directory'] = sys.argv[i]
+  elif arg == '-s' or arg == '--src':
+    i += 1
+    kwargs['src'] = sys.argv[i]
+  elif arg == '-d' or arg == '--dst':
+    i += 1
+    kwargs['dst'] = sys.argv[i]
+  elif arg == '-r' or arg == '--rstkey':
+    i += 1
+    kwargs['rstkey'] = int(sys.argv[i])
+  i += 1
+argc = len(kwargs)
+
+if "usage"  in kwargs or argc == 0:
+  print("""
+Usage: %s OPTIONS
+Example: %s -s breed.bin -d breed_mod.bin -r 4
+Options:
+  -u, --unpack      unpack breed bootloader
+  -o, --outdir      output directory (only with -u)
+  -s, --src         source breed image
+  -d, --dst         dst breed image (with -r and wo -u only)
+  -r, --rstkey      new GPIO reset key number (only with -d)
+  -h, --help        print help
+""" % (sys.argv[0], sys.argv[0]))
+  exit(1)
+
+if argc < 2 or argc > 3:
+  print("Error: 2 to 3 parameters expected,", argc, "are given.")
+  exit(1)
+
+if "unpack" in kwargs and "directory" not in kwargs:
+  print("Error: -o, -u are working together only.")
+  exit(1)
+
+if "dst" in kwargs and "rstkey" not in kwargs:
+  print("Error: -d, -r are working together only.")
+  exit(1)
+
+
+breed_magic_int = 0x37540178
+if "dst" in kwargs and "rstkey" in kwargs:
+  ret = patch_breed(kwargs["src"], kwargs["dst"], kwargs["rstkey"], breed_magic_int)
+elif "directory" in kwargs and "unpack" in kwargs:
+  ret = extract_breed(kwargs["src"], kwargs["directory"], breed_magic_int)
+else:
+  print("Error: arguments error.")
+  exit(1)
+
+exit(ret)
