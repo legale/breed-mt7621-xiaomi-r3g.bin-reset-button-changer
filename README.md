@@ -4,11 +4,11 @@ This script purpose is to change the GPIO number of the reset button in the boot
 Tested with breed versions r1338, r1286.
 
 ## Smartbox devices 
-Reset Button - Device's
-GPIO 7  - Beeline SmartBox PRO/WiFire S1500.NBN
-GPIO 14 - Beeline SmartBox TURBO+/Beeline SmartBox TURBO/Etisalat Sercomm S3
-GPIO 4  - Beeline SmartBox GIGA
-GPIO 3  - Beeline SmartBox Flash/MTS WG430223
+Reset button:
+- GPIO 7  - Beeline SmartBox PRO/WiFire S1500.NBN
+- GPIO 14 - Beeline SmartBox TURBO+/Beeline SmartBox TURBO/Etisalat Sercomm S3
+- GPIO 4  - Beeline SmartBox GIGA
+- GPIO 3  - Beeline SmartBox Flash/MTS WG430223
 
 ## Usage
 To change reset GPIO number to 5:
