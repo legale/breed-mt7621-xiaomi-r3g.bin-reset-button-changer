@@ -214,40 +214,41 @@ def find_magic_off(data, hex_str, start = None, end = None):
   if off > -1:
     return off
   else:
-    return -1
+    print("Error: seq: %x not found from 0x%04x to 0x%04x" % (seq, start, end))
+    exit(1)
+
+def len_seq(string):
+  return len(bytes.fromhex(string.replace(" ", "")))
 
 def assign_reset_btn(button, breed_bin):
   breed_bin = bytearray(breed_bin)
+  #red button value seq just after reset button
   red_magic_seq = "06 00 04 24 01 00 05 24"
+  #reset button seq just after value byte
   rst_magic_seq = "00 04 24 01 00 05 24"
-  print("Looking for red magic sequence...")
-  off = find_magic_off(breed_bin, red_magic_seq)
-  if off > -1:
-    print("Found offset: 0x%04x %d" % (off, off))
-  else:
-    print("Error: not found")
-    exit(1)
-  
-  start = off - 32 #start offset -32 bytes
-  end = off
-  print("Looking for reset magic sequence from 0x%04x to 0x%04x..." % (start, end) )
-  off = find_magic_off(breed_bin,rst_magic_seq, start, end)
-  if off > -1:
-    print("Found offset: 0x%04x %d" % (off, off))
-  else:
-    print("Error: not found")
-    exit(1)
-
-  rst_val_off = off - 1
-  rst_val_end = rst_val_off + 2
-  print("Changing reset button value with offset 0x%04x %d..."\
-      % (rst_val_off, rst_val_off))
-  cur_val = unpack_auto(breed_bin[rst_val_off:rst_val_end], "le")
-  print("Current value 0x%02x %d" % (cur_val, cur_val))
-  breed_bin[rst_val_off:rst_val_end] = pack_auto(button, 2, "le")
-  cur_val = unpack_auto(breed_bin[rst_val_off:rst_val_end], "le")
-  print("New value 0x%02x %d" % (cur_val, cur_val))
+  #wan LED value seq just before lan2 LED value
+  wan_magic_seq = "0d 00 04 24 01 00 05 24"
+  #lan2 LED seq just after value byte
+  lan2_magic_seq = "00 04 24 01 00 05 24"
+  red_off = find_magic_off(breed_bin, red_magic_seq)
+  start = red_off - 32 #start offset -32 bytes
+  end = red_off
+  rst_off = find_magic_off(breed_bin, rst_magic_seq, start, end)
+  rst_val_off = rst_off - 1
+  wan_off = find_magic_off(breed_bin, wan_magic_seq, end, end + 128)
+  start = wan_off + len_seq(wan_magic_seq)
+  lan2_off = find_magic_off(breed_bin, lan2_magic_seq, start, start + 32)
+  lan2_val_off = lan2_off - 1
+  breed_bin = change_byte(breed_bin, rst_val_off, button, "reset button")
+  breed_bin = change_byte(breed_bin, lan2_val_off, 12, "LED")
   return bytes(breed_bin)
+
+def change_byte(data, off, val, msg):
+  cur_v = unpack_auto(data[off:off+1], "le")
+  data[off:off+1] = pack_auto(val, 1, "le")
+  new_v = unpack_auto(data[off:off+1], "le")
+  print("Replacing %s value 0x%02x %d to 0x%02x %d (offset: 0x%04x)" % (msg, cur_v, cur_v, new_v, new_v, off))
+  return data
 
 def patch_breed(src, dst, rstkey, breed_magic_int):
   #read breed data
