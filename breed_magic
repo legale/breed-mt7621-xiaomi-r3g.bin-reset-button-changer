@@ -23,13 +23,17 @@ def unpack_auto(data, order = "be"):
 def get_pow(i):
   return len(bin(i)[2:]) - 1
 
+def print_pad(left, right, pad = 55):
+  pre = "%-" + str(pad) + "s %s"
+  print(pre % (left, right))
+  
 def pack_lzma_bin(data, lzma_props):
   print("Compressing data with lzma...")
   data_len = len(data)
-  print("  data length 0x%08x %d"% (data_len, data_len))
-  print("  lzma compression properties:")
+  print("Data length 0x%08x %d"% (data_len, data_len))
+  print("Lzma compression properties:")
   for k, v in lzma_props.items():
-    print("    %s: 0x%x %d" % (k,v,v))
+    print_pad(" %s:" % k, "0x%x %d" % (v,v))
   
   src = "tmp_data.bin"
   dst = "tmp_data.bin.lzma"
@@ -50,7 +54,7 @@ def pack_lzma_bin(data, lzma_props):
   lzma_len = len(lzma_data)
 
   os.remove(src); os.remove(dst) 
-  print("lzma data length 0x%08x %d" % (lzma_len, lzma_len))
+  print_pad("lzma data length", "0x%08x %d" % (lzma_len, lzma_len))
   return lzma_data
 
 
@@ -61,7 +65,7 @@ def unpack_lzma_bin(lzma_data):
   lzma_props = decode_lzma_props(lzma_h)
   print("  lzma properties:")
   for k,v in lzma_props.items():
-    print("    %s 0x%x %d" % (k,v,v))
+    print_pad("    %s" % k, "0x%x %d" % (v,v))
   
   src = "tmp_lzma_data.lzma"
   dst = "tmp_lzma_data.bin"
@@ -72,7 +76,7 @@ def unpack_lzma_bin(lzma_data):
   print("Exec: " + exec_str)
   ret = os.popen(exec_str).read()
   if ret == "":
-    print("  Done.")
+    print("Done.")
   else:
     print("Error: %s" % ret)
     exit(1)
@@ -82,25 +86,24 @@ def unpack_lzma_bin(lzma_data):
   data_len = len(data)
 
   os.remove(src); os.remove(dst) 
-  print("data length 0x%08x %d" % (data_len, data_len))
+  print_pad("Data length", "0x%08x %d" % (data_len, data_len))
   return data
 
 def read_breed_data(data, breed_magic_int):
   breed_magic = pack(">I", breed_magic_int)
   i = breed_magic_int
-  print("Looking for breed magic number 0x%04x %d..." % (i, i))
   brh_off = data.find(breed_magic)
   if brh_off > -1:
-    print("Found offset 0x%04x %d" % (brh_off, brh_off))
+    print_pad("Looking for breed magic number 0x%04x %d..." % (i, i), "0x%05x %d" % (brh_off, brh_off))
   else:
-    print("Error: not found")
+    print_pad("Looking for breed magic number 0x%04x %d..." % (i, i), "failed" % (brh_off, brh_off))
     return False
   lzma_off = brh_off + 16
-  print("  breed header offset 0x%04x %d" % (brh_off, brh_off) ) 
-  print("  lzma data offset    0x%04x %d" % (lzma_off, lzma_off) )
+  print_pad("Breed header offset", "0x%05x %d" % (brh_off, brh_off)) 
+  print_pad("Lzma data offset",    "0x%05x %d" % (lzma_off, lzma_off))
   br_h = read_breed_header(data[brh_off:lzma_off])
   lzma_len = unpack_auto(br_h["length"], "be") #convert 4 bytes to uint32_t 
-  print("  lzma bin data length 0x%04x %d" % (lzma_len, lzma_len))
+  print_pad("Lzma bin data length", "0x%05x %d" % (lzma_len, lzma_len))
   lzma_end = lzma_off + lzma_len 
   return {
 		"uimage_header":	data[0:64],
@@ -202,7 +205,7 @@ def extract_breed(filepath, directory, breed_magic_int):
     f = open(dstpath, 'wb')
     f.write(v)
     f.close()
-  print("Done.")    
+  print("  Done.")    
   return 0
 
 def get_breed_data_wo_header(d):
@@ -214,7 +217,7 @@ def find_magic_off(data, hex_str, start = None, end = None):
   if off > -1:
     return off
   else:
-    print("Error: seq: %x not found from 0x%04x to 0x%04x" % (seq, start, end))
+    print_pad("Error: seq: %x not found from" % seq, "0x%04x to 0x%04x" % (start, end))
     exit(1)
 
 def len_seq(string):
@@ -247,7 +250,7 @@ def change_byte(data, off, val, msg):
   cur_v = unpack_auto(data[off:off+1], "le")
   data[off:off+1] = pack_auto(val, 1, "le")
   new_v = unpack_auto(data[off:off+1], "le")
-  print("Replacing %s value 0x%02x %d to 0x%02x %d (offset: 0x%04x)" % (msg, cur_v, cur_v, new_v, new_v, off))
+  print_pad("Replacing %s value 0x%01x %d to 0x%01x %d" % (msg, cur_v, cur_v, new_v, new_v), "offset: 0x%04x" % off)
   return data
 
 def patch_breed(src, dst, rstkey, breed_magic_int):
@@ -321,15 +324,16 @@ def patch_breed(src, dst, rstkey, breed_magic_int):
   return 0
 
 def assert_equal(a, b, name):
+  name += "..."
   if a == b:
-    print("  Checking %s...\t\t%s" % (name, "ok"))
+    print_pad("Checking %s" % name, "ok")
   else:
-    print("  Checking %s...\t\t%s a: 0x%04x %s b: 0x%04x %s" % (name, "failed", a, a, b, b))
+    print_pad("Checking %s" % name, "failed a: 0x%04x %s b: 0x%04x" % (a, a, b, b))
     exit(1)
   return True 
 
 def check_breed_image(data, breed_magic_int, name):
-  print("Checking %s..." % name)
+  print_pad("Checking %s..." % name, "")
   img = read_breed_data(data, breed_magic_int)
   u_h = read_uimage_header(img["uimage_header"])
   nand_h = read_nand_header(u_h["nand_header"])
