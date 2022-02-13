@@ -1,0 +1,1 @@
+/home/ru/breed-mt7621-xiaomi-r3g.bin-reset-button-changer/README.md
