@@ -22,4 +22,5 @@ Patched binary for smartbox flash/giga/turbo/pro was tested on smartbox flash wi
 Screen recording with the script patching demo and testing its launch on a real device 
 https://raw.githubusercontent.com/legale/breed-mt7621-xiaomi-r3g.bin-reset-button-changer/main/demo.mp4
 
-
+## IMPORTANT
+repo has compiled lzma version 4.62. Higher versions are not working.
